@@ -1,66 +1,19 @@
-package commands
+package main
 
 import (
 	"archive/tar"
-	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
 	"path/filepath"
 
-	"code.cloudfoundry.org/lager"
 	digest "github.com/opencontainers/go-digest"
 	specsv1 "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/urfave/cli"
 )
-
-var BuildOCIImage = cli.Command{
-	Name:        "build-oci-image",
-	Usage:       "build-oci-image <rootfs tar> <droplet tar>",
-	Description: "Creates an OCI image manifest based on the droplet tars specified",
-	Action: func(ctx *cli.Context) error {
-		logger := ctx.App.Metadata["logger"].(lager.Logger)
-		logger = logger.Session("build-oci-image")
-
-		if ctx.NArg() != 2 {
-			return errors.New(fmt.Sprintf("invalid arguments - usage: %s", ctx.Command.Usage))
-		}
-
-		for _, tarPath := range ctx.Args() {
-			if _, err := os.Stat(tarPath); err != nil {
-				return errors.New(fmt.Sprintf("File %s does not exist", tarPath))
-			}
-		}
-
-		// TODO stop hardcoding
-		store := "/Users/pivotal/workspace/registry-experiment/store"
-
-		builder := &imageBuilder{store: store}
-		manifest, err := builder.buildOCIManifest(ctx.Args()[0], ctx.Args()[1])
-		if err != nil {
-			return err
-		}
-
-		manifestMarshalled, err := json.Marshal(manifest)
-		if err != nil {
-			return err
-		}
-		var pretty bytes.Buffer
-		if err := json.Indent(&pretty, manifestMarshalled, "", "    "); err != nil {
-			return err
-		}
-
-		fmt.Println(pretty.String())
-
-		return nil
-	},
-}
 
 type imageBuilder struct {
 	store string

@@ -1,38 +1,52 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"registry/commands"
+	"path/filepath"
 
-	"code.cloudfoundry.org/lager"
-	"github.com/urfave/cli"
+	"github.com/gorilla/mux"
+	"github.com/urfave/negroni"
 )
 
 func main() {
-	registry := cli.NewApp()
-	registry.Name = "registry-experiment"
-	registry.Version = "0.0.1"
-	registry.Usage = "The Registry Experiment"
+	store := flag.String("store", "", "store")
+	flag.Parse()
 
-	registry.Commands = []cli.Command{
-		commands.BuildOCIImage,
-	}
+	httpHandler := mux.NewRouter()
+	httpHandler.HandleFunc("/v2/{name}/manifests/{tag}", func(w http.ResponseWriter, r *http.Request) {
+		manifest := `{
+   "name": "testytest",
+   "tag": "tagg",
+   "fsLayers": [
+      {
+				"blobSum": "sha256:8e6b0a5eff3664b2dc52fc1ddfa6692c1e0ca0acc8b8a257958657a78590118e"
+      },
+      {
+				"blobSum": "sha256:080046d8de86bce1034dd89daeac2b467ca4185991a20b3d9039bbb7e7bb544f"
+      }
+   ],
+	 "signature": "NOT_USED"
+ }`
+		fmt.Fprintln(w, manifest)
+	}).Methods("GET")
 
-	registry.Before = func(ctx *cli.Context) error {
-		ctx.App.Metadata["logger"] = createLogger()
-		return nil
-	}
+	httpHandler.HandleFunc("/v2/{name}/blobs/{digest}", func(w http.ResponseWriter, r *http.Request) {
+		pathParams := mux.Vars(r)
+		blob, err := os.Open(filepath.Join(*store, pathParams["digest"]))
+		if err != nil {
+			panic(err)
+		}
+		defer blob.Close()
+		if _, err := io.Copy(w, blob); err != nil {
+			panic(err)
+		}
+	})
 
-	if err := registry.Run(os.Args); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
-}
-
-func createLogger() lager.Logger {
-	logger := lager.NewLogger("registry-experiment")
-	logger.RegisterSink(lager.NewWriterSink(os.Stderr, lager.DEBUG))
-
-	return logger
+	server := negroni.Classic()
+	server.UseHandler(httpHandler)
+	server.Run(":8080") // TODO parameterise
 }
