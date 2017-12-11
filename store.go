@@ -132,7 +132,7 @@ func (s *storeManager) downloadDroplet(appGUID string) string {
 	s.logger.Printf("downloading droplet for app %s...", appGUID)
 	defer s.logger.Printf("done downloading droplet for app %s", appGUID)
 
-	dropletPath := filepath.Join(s.path, appGUID+"droplet")
+	dropletPath := filepath.Join(s.path, appGUID+"-droplet")
 	_, err := os.Stat(dropletPath)
 	if err == nil {
 		return dropletPath
