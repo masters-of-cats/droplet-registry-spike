@@ -25,8 +25,8 @@ func NewAPI(listenAddress string, store *storeManager) *api {
 	httpHandler := mux.NewRouter()
 
 	httpHandler.HandleFunc("/v2/", server.emptyBody).Methods("GET")
-	httpHandler.HandleFunc("/v2/{name}/manifests/{tag}", server.getManifest).Methods("GET")
-	httpHandler.HandleFunc("/v2/{name}/blobs/{digest}", server.getBlob).Methods("GET")
+	httpHandler.HandleFunc("/v2/{app-guid}/manifests/{tag}", server.getManifest).Methods("GET")
+	httpHandler.HandleFunc("/v2/{app-guid}/blobs/{digest}", server.getBlob).Methods("GET")
 
 	server.UseHandler(httpHandler)
 	return server
@@ -42,10 +42,10 @@ func (a *api) emptyBody(w http.ResponseWriter, r *http.Request) {
 
 func (a *api) getManifest(w http.ResponseWriter, r *http.Request) {
 	pathParams := mux.Vars(r)
-	appName := pathParams["name"]
+	appGUID := pathParams["app-guid"]
 
 	w.Header().Add("Content-Type", manifestMediaType)
-	a.store.AppManifest(w, appName)
+	a.store.AppManifest(w, appGUID)
 }
 
 func (a *api) getBlob(w http.ResponseWriter, r *http.Request) {

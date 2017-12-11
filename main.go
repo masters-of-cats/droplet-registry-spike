@@ -14,7 +14,8 @@ func main() {
 	store := flag.String("store", "", "store")
 	listenAddress := flag.String("listen-address", "", "listen-address")
 	rootfsPath := flag.String("rootfs-path", "", "rootfs")
-	appsPath := flag.String("apps-path", "", "to be replaced by Cloud Foundry blobstore access")
+	capiURL := flag.String("capi-url", "", "capi-url")
+	capiAuthToken := flag.String("capi-authtoken", "", "capi-authtoken")
 	flag.Parse()
 
 	if *store == "" {
@@ -23,11 +24,19 @@ func main() {
 	if *rootfsPath == "" {
 		panic("please set --rootfs-path")
 	}
-	if *appsPath == "" {
-		panic("please set --apps-path")
+	if *capiURL == "" {
+		panic("please set --capi-url")
+	}
+	if *capiAuthToken == "" {
+		panic("please set --capi-authtoken")
 	}
 
-	storeMgr := &storeManager{path: *store, appsPath: *appsPath, logger: logger}
+	storeMgr := &storeManager{
+		path:          *store,
+		capiURL:       *capiURL,
+		capiAuthToken: *capiAuthToken,
+		logger:        logger,
+	}
 	storeMgr.importRootfs(*rootfsPath)
 
 	NewAPI(*listenAddress, storeMgr).ListenAndServe()

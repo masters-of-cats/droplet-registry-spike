@@ -4,27 +4,40 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 )
 
+var httpClient *http.Client
+
+func init() {
+	httpClient = &http.Client{Transport: &http.Transport{
+		// SPIKE
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}}
+}
+
 type storeManager struct {
-	path     string
-	appsPath string
-	logger   *log.Logger
+	path          string
+	capiURL       string
+	capiAuthToken string
+	logger        *log.Logger
 
 	rootfsDesc   descriptor
 	rootfsDiffID string
 }
 
-func (s *storeManager) AppManifest(dest io.Writer, appName string) {
+func (s *storeManager) AppManifest(dest io.Writer, appGUID string) {
 	// This spike doesn't support apps whose names are valid hex-encoded sha256
-	cachedManifestPath := filepath.Join(s.path, appName)
+	cachedManifestPath := filepath.Join(s.path, appGUID+"-manifest")
 	cachedManifestFile, err := os.Open(cachedManifestPath)
 	if err == nil {
 		_, err = io.Copy(dest, cachedManifestFile)
@@ -36,7 +49,7 @@ func (s *storeManager) AppManifest(dest io.Writer, appName string) {
 		must("should never happen", err)
 	}
 
-	appLayerDesc, appLayerDiffID := s.importAppLayer(appName)
+	appLayerDesc, appLayerDiffID := s.importAppLayer(appGUID)
 
 	appConfig := createImageConfig(s.rootfsDiffID, appLayerDiffID)
 	configJson, err := json.Marshal(appConfig)
@@ -66,6 +79,8 @@ func (s *storeManager) GetBlob(dest io.Writer, blobChecksum string) {
 func (s *storeManager) importRootfs(rootfsPath string) {
 	s.logger.Printf("importing rootfs from %s...", rootfsPath)
 	defer s.logger.Printf("done importing rootfs from %s", rootfsPath)
+
+	must("create store", os.MkdirAll(s.path, 0700))
 
 	originalRootfs, err := os.Open(rootfsPath)
 	must("open rootfs", err)
@@ -113,11 +128,39 @@ func uncompressedChecksum(file *os.File) string {
 	return "sha256:" + string(hex.EncodeToString(summer.Sum(nil)))
 }
 
-func (s *storeManager) importAppLayer(appName string) (descriptor, string) {
-	s.logger.Printf("getting layer for app %s...", appName)
-	defer s.logger.Printf("done getting layer for app %s", appName)
+func (s *storeManager) downloadDroplet(appGUID string) string {
+	s.logger.Printf("downloading droplet for app %s...", appGUID)
+	defer s.logger.Printf("done downloading droplet for app %s", appGUID)
 
-	dropletPath := filepath.Join(s.appsPath, appName+".tar.gz")
+	dropletPath := filepath.Join(s.path, appGUID+"droplet")
+	_, err := os.Stat(dropletPath)
+	if err == nil {
+		return dropletPath
+	}
+
+	request, err := http.NewRequest("GET", fmt.Sprintf("%s/v2/apps/%s/droplet/download", s.capiURL, appGUID), nil)
+	must("create a request", err)
+	request.Header.Add("Authorization", s.capiAuthToken) // "bearer" is already prefixed in the result of `cf oauth-token`
+
+	response, err := httpClient.Do(request)
+	must("do a request", err)
+	defer response.Body.Close()
+
+	file, err := os.Create(dropletPath)
+	must("create app-droplet file", err)
+	defer file.Close()
+
+	_, err = io.Copy(file, response.Body)
+	must("write the droplet to a file", err)
+
+	return dropletPath
+}
+
+func (s *storeManager) importAppLayer(appGUID string) (descriptor, string) {
+	s.logger.Printf("getting layer for app %s...", appGUID)
+	defer s.logger.Printf("done getting layer for app %s", appGUID)
+
+	dropletPath := s.downloadDroplet(appGUID)
 	dropletFile, err := os.Open(dropletPath)
 	must("open droplet tarball", err)
 	defer dropletFile.Close()
