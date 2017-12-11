@@ -18,7 +18,8 @@ type storeManager struct {
 	appsPath string
 	logger   *log.Logger
 
-	rootfsDesc descriptor
+	rootfsDesc   descriptor
+	rootfsDiffID string
 }
 
 func (s *storeManager) AppManifest(dest io.Writer, appName string) {
@@ -35,9 +36,9 @@ func (s *storeManager) AppManifest(dest io.Writer, appName string) {
 		must("should never happen", err)
 	}
 
-	appLayerDesc := s.importAppLayer(appName)
+	appLayerDesc, appLayerDiffID := s.importAppLayer(appName)
 
-	appConfig := createImageConfig(s.rootfsDesc.Digest, appLayerDesc.Digest)
+	appConfig := createImageConfig(s.rootfsDiffID, appLayerDiffID)
 	configJson, err := json.Marshal(appConfig)
 	must("marshalling config", err)
 	checksumBytes := sha256.Sum256(configJson)
@@ -96,9 +97,23 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	defer destFile.Close()
 	_, err = io.Copy(destFile, originalRootfs)
 	must("write rootfs file to store", err)
+
+	_, err = originalRootfs.Seek(0, 0)
+	must("seek rootfs back to 0", err)
+	s.rootfsDiffID = uncompressedChecksum(originalRootfs)
 }
 
-func (s *storeManager) importAppLayer(appName string) descriptor {
+func uncompressedChecksum(file *os.File) string {
+	gzipReader, err := gzip.NewReader(file)
+	must("treat file as gzip", err)
+	summer := sha256.New()
+	_, err = io.Copy(summer, gzipReader)
+	must("checksum uncompressed file", err)
+	must("close gzip reader", gzipReader.Close())
+	return "sha256:" + string(hex.EncodeToString(summer.Sum(nil)))
+}
+
+func (s *storeManager) importAppLayer(appName string) (descriptor, string) {
 	s.logger.Printf("getting layer for app %s...", appName)
 	defer s.logger.Printf("done getting layer for app %s", appName)
 
@@ -111,7 +126,8 @@ func (s *storeManager) importAppLayer(appName string) descriptor {
 	must("assuming droplet is gzipped", err)
 	tarReader := tar.NewReader(zipReader)
 
-	destFile, err := ioutil.TempFile("", "oci-cli")
+	// Don't do 2 pulls at once...
+	destFile, err := os.OpenFile(filepath.Join(s.path, "tmp"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	must("opening temporary file to re-tar droplet", err)
 	summer := sha256.New()
 	counter := new(byteCounter)
@@ -141,7 +157,12 @@ func (s *storeManager) importAppLayer(appName string) descriptor {
 	must("close temporary droplet file", destFile.Close())
 
 	checksum := hex.EncodeToString(summer.Sum(nil))
-	must("move droplet into store", os.Rename(destFile.Name(), filepath.Join(s.path, checksum)))
+	appLayerPath := filepath.Join(s.path, checksum)
+	must("move droplet into store", os.Rename(destFile.Name(), appLayerPath))
 
-	return layerDescriptor(checksum, counter.size)
+	appLayerFile, err := os.Open(appLayerPath)
+	must("opening app layer file", err)
+	defer appLayerFile.Close()
+
+	return layerDescriptor(checksum, counter.size), uncompressedChecksum(appLayerFile)
 }

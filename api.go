@@ -87,9 +87,8 @@ type containerConfig struct {
 }
 
 type rootfs struct {
-	Type      string   `json:"type"`
-	DiffIDs   []string `json:"diff_ids"`
-	BaseLayer string   `json:"base_layer"`
+	Type    string   `json:"type"`
+	DiffIDs []string `json:"diff_ids"`
 }
 
 func createImageConfig(diffIDs ...string) imageConfig {
