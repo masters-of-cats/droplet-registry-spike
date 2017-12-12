@@ -94,6 +94,7 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	must("checksum rootfs", err)
 	checksum := hex.EncodeToString(summer.Sum(nil))
 	s.rootfsDesc = layerDescriptor(checksum, originalRootfsSize)
+	s.rootfsDiffID = uncompressedChecksum(originalRootfs)
 
 	storedRootfsPath := filepath.Join(s.path, checksum)
 	_, err = os.Stat(storedRootfsPath)
@@ -112,13 +113,11 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	defer destFile.Close()
 	_, err = io.Copy(destFile, originalRootfs)
 	must("write rootfs file to store", err)
-
-	_, err = originalRootfs.Seek(0, 0)
-	must("seek rootfs back to 0", err)
-	s.rootfsDiffID = uncompressedChecksum(originalRootfs)
 }
 
 func uncompressedChecksum(file *os.File) string {
+	_, err := file.Seek(0, 0)
+	must("seek file back to 0", err)
 	gzipReader, err := gzip.NewReader(file)
 	must("treat file as gzip", err)
 	summer := sha256.New()
