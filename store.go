@@ -14,6 +14,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"github.com/pborman/uuid"
 )
 
 var httpClient *http.Client
@@ -76,6 +78,24 @@ func (s *storeManager) GetBlob(dest io.Writer, blobChecksum string) {
 	must("copy blob", err)
 }
 
+func uncompressedChecksum() (chan string, *os.File) {
+	pipeR, pipeW, err := os.Pipe()
+	must("mkpipes", err)
+	uncompressedSummer := sha256.New()
+	result := make(chan string)
+	go func() {
+		uncompressedReader, err := gzip.NewReader(pipeR)
+		must("treat file as gzip", err)
+		defer uncompressedReader.Close()
+		_, err = io.Copy(uncompressedSummer, uncompressedReader)
+		must("copy uncompressed file", err)
+		result <- "sha256:" + hex.EncodeToString(uncompressedSummer.Sum(nil))
+		pipeR.Close()
+	}()
+
+	return result, pipeW
+}
+
 func (s *storeManager) importRootfs(rootfsPath string) {
 	s.logger.Printf("importing rootfs from %s...", rootfsPath)
 	defer s.logger.Printf("done importing rootfs from %s", rootfsPath)
@@ -90,30 +110,17 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	originalRootfsSize := rootfsInfo.Size()
 
 	summer := sha256.New()
-
-	pipeR, pipeW, err := os.Pipe()
-	must("mkpipes", err)
-	defer pipeR.Close()
-	uncompressedSummer := sha256.New()
-	doneCopyingUncompressed := make(chan struct{})
-	go func() {
-		uncompressedReader, err := gzip.NewReader(pipeR)
-		must("treat rootfs as gzip", err)
-		defer uncompressedReader.Close()
-		_, err = io.Copy(uncompressedSummer, uncompressedReader)
-		must("copy uncompressed rootfs", err)
-		close(doneCopyingUncompressed)
-	}()
+	uncompressedChecksumResult, pipeW := uncompressedChecksum()
 
 	tee := io.MultiWriter(pipeW, summer)
 
 	_, err = io.Copy(tee, originalRootfs)
 	must("checksum rootfs", err)
 	pipeW.Close()
-	<-doneCopyingUncompressed
+	diffID := <-uncompressedChecksumResult
 	checksum := hex.EncodeToString(summer.Sum(nil))
 	s.rootfsDesc = layerDescriptor(checksum, originalRootfsSize)
-	s.rootfsDiffID = "sha256:" + hex.EncodeToString(uncompressedSummer.Sum(nil))
+	s.rootfsDiffID = diffID
 
 	storedRootfsPath := filepath.Join(s.path, checksum)
 	_, err = os.Stat(storedRootfsPath)
@@ -132,18 +139,6 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	defer destFile.Close()
 	_, err = io.Copy(destFile, originalRootfs)
 	must("write rootfs file to store", err)
-}
-
-func uncompressedChecksum(file *os.File) string {
-	_, err := file.Seek(0, 0)
-	must("seek file back to 0", err)
-	gzipReader, err := gzip.NewReader(file)
-	must("treat file as gzip", err)
-	summer := sha256.New()
-	_, err = io.Copy(summer, gzipReader)
-	must("checksum uncompressed file", err)
-	must("close gzip reader", gzipReader.Close())
-	return "sha256:" + string(hex.EncodeToString(summer.Sum(nil)))
 }
 
 func (s *storeManager) downloadDroplet(appGUID string) string {
@@ -187,14 +182,16 @@ func (s *storeManager) importAppLayer(appGUID string) (descriptor, string) {
 	must("assuming droplet is gzipped", err)
 	tarReader := tar.NewReader(zipReader)
 
-	// Don't do 2 pulls at once... This is a spike, after all.
-	destFile, err := os.OpenFile(filepath.Join(s.path, "tmp"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
+	destFile, err := os.Create(filepath.Join(s.path, uuid.New()))
 	must("opening temporary file to re-tar droplet", err)
 	summer := sha256.New()
 	counter := new(byteCounter)
 	tee := io.MultiWriter(summer, destFile, counter)
 	zipWriter := gzip.NewWriter(tee)
-	tarWriter := tar.NewWriter(zipWriter)
+
+	uncompressedSummer := sha256.New()
+
+	tarWriter := tar.NewWriter(io.MultiWriter(zipWriter, uncompressedSummer))
 
 	for {
 		header, err := tarReader.Next()
@@ -225,5 +222,5 @@ func (s *storeManager) importAppLayer(appGUID string) (descriptor, string) {
 	must("opening app layer file", err)
 	defer appLayerFile.Close()
 
-	return layerDescriptor(checksum, counter.size), uncompressedChecksum(appLayerFile)
+	return layerDescriptor(checksum, counter.size), "sha256:" + hex.EncodeToString(uncompressedSummer.Sum(nil))
 }
