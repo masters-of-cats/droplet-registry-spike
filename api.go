@@ -26,7 +26,8 @@ func NewAPI(listenAddress string, store *storeManager) *api {
 
 	httpHandler.HandleFunc("/v2/", server.emptyBody).Methods("GET")
 	httpHandler.HandleFunc("/v2/{app-guid}/manifests/{tag}", server.getManifest).Methods("GET")
-	httpHandler.HandleFunc("/v2/{app-guid}/blobs/{digest}", server.getBlob).Methods("GET")
+	httpHandler.HandleFunc("/v2/{app-guid}/blobs/{digest}", server.redirectBlob).Methods("GET")
+	httpHandler.HandleFunc("/foreign-blobs/{digest}", server.getBlob).Methods("GET")
 
 	server.UseHandler(httpHandler)
 	return server
@@ -46,6 +47,13 @@ func (a *api) getManifest(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Add("Content-Type", manifestMediaType)
 	a.store.AppManifest(w, appGUID)
+}
+
+func (a *api) redirectBlob(w http.ResponseWriter, r *http.Request) {
+	pathParams := mux.Vars(r)
+	blobDigest := pathParams["digest"]
+
+	http.Redirect(w, r, "/foreign-blobs/"+blobDigest, http.StatusTemporaryRedirect)
 }
 
 func (a *api) getBlob(w http.ResponseWriter, r *http.Request) {
