@@ -38,10 +38,14 @@ type storeManager struct {
 }
 
 func (s *storeManager) AppManifest(dest io.Writer, appGUID string) {
+	s.logger.Printf("getting manifest for app %s...", appGUID)
+	defer s.logger.Printf("done getting manifest for app %s", appGUID)
+
 	// This spike doesn't support apps whose names are valid hex-encoded sha256
 	cachedManifestPath := filepath.Join(s.path, appGUID+"-manifest")
 	cachedManifestFile, err := os.Open(cachedManifestPath)
 	if err == nil {
+		s.logger.Println("manifest and associated layers already cached")
 		_, err = io.Copy(dest, cachedManifestFile)
 		must("copy cached manifest", err)
 		cachedManifestFile.Close()
@@ -109,6 +113,7 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	must("stat rootfs", err)
 	originalRootfsSize := rootfsInfo.Size()
 
+	s.logger.Println("calculating rootfs compressed and uncompressed checksums...")
 	summer := sha256.New()
 	uncompressedChecksumResult, pipeW := uncompressedChecksum()
 
@@ -125,11 +130,13 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	storedRootfsPath := filepath.Join(s.path, checksum)
 	_, err = os.Stat(storedRootfsPath)
 	if err == nil {
+		s.logger.Println("rootfs already cached")
 		return
 	}
 	if !os.IsNotExist(err) {
 		must("stat cached rootfs", err)
 	}
+	s.logger.Println("rootfs not cached, copying into store")
 
 	_, err = originalRootfs.Seek(0, 0)
 	must("seek rootfs back to 0", err)
