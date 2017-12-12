@@ -90,11 +90,30 @@ func (s *storeManager) importRootfs(rootfsPath string) {
 	originalRootfsSize := rootfsInfo.Size()
 
 	summer := sha256.New()
-	_, err = io.Copy(summer, originalRootfs)
+
+	pipeR, pipeW, err := os.Pipe()
+	must("mkpipes", err)
+	defer pipeR.Close()
+	uncompressedSummer := sha256.New()
+	doneCopyingUncompressed := make(chan struct{})
+	go func() {
+		uncompressedReader, err := gzip.NewReader(pipeR)
+		must("treat rootfs as gzip", err)
+		defer uncompressedReader.Close()
+		_, err = io.Copy(uncompressedSummer, uncompressedReader)
+		must("copy uncompressed rootfs", err)
+		close(doneCopyingUncompressed)
+	}()
+
+	tee := io.MultiWriter(pipeW, summer)
+
+	_, err = io.Copy(tee, originalRootfs)
 	must("checksum rootfs", err)
+	pipeW.Close()
+	<-doneCopyingUncompressed
 	checksum := hex.EncodeToString(summer.Sum(nil))
 	s.rootfsDesc = layerDescriptor(checksum, originalRootfsSize)
-	s.rootfsDiffID = uncompressedChecksum(originalRootfs)
+	s.rootfsDiffID = "sha256:" + hex.EncodeToString(uncompressedSummer.Sum(nil))
 
 	storedRootfsPath := filepath.Join(s.path, checksum)
 	_, err = os.Stat(storedRootfsPath)
@@ -168,7 +187,7 @@ func (s *storeManager) importAppLayer(appGUID string) (descriptor, string) {
 	must("assuming droplet is gzipped", err)
 	tarReader := tar.NewReader(zipReader)
 
-	// Don't do 2 pulls at once...
+	// Don't do 2 pulls at once... This is a spike, after all.
 	destFile, err := os.OpenFile(filepath.Join(s.path, "tmp"), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
 	must("opening temporary file to re-tar droplet", err)
 	summer := sha256.New()
